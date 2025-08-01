@@ -1,0 +1,21 @@
+:root {
+    --AGI-Nav-width: 52px;
+    /*noinspection CssInvalidFunction*/
+    --AGI-Desktop-Drawer-width: round(clamp(260px, 18vw, 350px), 1px);
+    /*noinspection CssInvalidFunction*/
+    --AGI-Desktop-Panel-width: round(clamp(260px, 18vw, 350px), 1px);
+    --AGI-Mobile-Drawer-width: 320px;
+    --AGI-Mobile-Panel-width: 320px;
+    --AGI-overlay-start-opacity: 0;
+}
+
+.agi-ellipsize {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+
+/* Prevents pull-to-refresh on mobile, so it's not triggered while scrolling the chat inadvertently */
+body {
+    overscroll-behavior-y: none;
+}
