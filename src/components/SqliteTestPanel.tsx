@@ -28,6 +28,8 @@ export function SqliteTestPanel() {
   const [uxLabsStoreState, setUxLabsStoreState] = useState<any>(null);
   const [metricsData, setMetricsData] = useState<any>(null);
   const [testServiceIdForMetrics, setTestServiceIdForMetrics] = useState('test-service-metrics');
+  const [workspaceState, setWorkspaceState] = useState<any>(null);
+  const [personasData, setPersonasData] = useState<any>(null);
 
   const addTestResult = (message: string) => {
     setTestResults((prev) => [...prev, `${new Date().toLocaleTimeString()}: ${message}`]);
@@ -953,11 +955,297 @@ export function SqliteTestPanel() {
     }
   };
 
+  // Workspace Store Testing Functions
+  const testWorkspaceOperations = async () => {
+    try {
+      setIsLoading(true);
+      addTestResult('Starting comprehensive workspace file management test...');
+
+      // Step 1: Create test workspaces with file assignments
+      const testWorkspaces = [
+        { id: 'workspace-chat-1', files: ['file-doc-1', 'file-image-1'] },
+        { id: 'workspace-chat-2', files: ['file-doc-2', 'file-image-1'] }, // shared file
+        { id: 'workspace-project-1', files: ['file-code-1', 'file-readme-1'] }
+      ];
+
+      addTestResult('Step 1: Creating test workspace assignments...');
+      
+      for (const workspace of testWorkspaces) {
+        for (const fileId of workspace.files) {
+          const response = await fetch(`/api/workspace/${workspace.id}`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+              operation: 'assign',
+              fileId: fileId
+            })
+          });
+
+          if (!response.ok) {
+            throw new Error(`Failed to assign ${fileId} to ${workspace.id}`);
+          }
+        }
+        addTestResult(`✅ Assigned ${workspace.files.length} files to ${workspace.id}`);
+      }
+
+      // Step 2: Test file queries for each workspace
+      addTestResult('Step 2: Testing workspace file queries...');
+      
+      for (const workspace of testWorkspaces) {
+        const response = await fetch(`/api/workspace/${workspace.id}`);
+        if (!response.ok) {
+          throw new Error(`Failed to query files for ${workspace.id}`);
+        }
+        
+        const data = await response.json();
+        addTestResult(`✅ ${workspace.id}: ${data.data.files.length} files found`);
+      }
+
+      // Step 3: Test copy assignments between workspaces
+      addTestResult('Step 3: Testing copy assignments...');
+      
+      const copyResponse = await fetch('/api/workspace/workspace-copy-test', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operation: 'copy',
+          sourceWorkspaceId: 'workspace-chat-1'
+        })
+      });
+
+      if (!copyResponse.ok) {
+        throw new Error('Failed to copy workspace assignments');
+      }
+
+      addTestResult('✅ Successfully copied assignments between workspaces');
+
+      // Step 4: Test file unassignment
+      addTestResult('Step 4: Testing file unassignment...');
+      
+      const unassignResponse = await fetch('/api/workspace/workspace-chat-1', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          operation: 'unassign',
+          fileId: 'file-doc-1'
+        })
+      });
+
+      if (!unassignResponse.ok) {
+        throw new Error('Failed to unassign file');
+      }
+
+      addTestResult('✅ Successfully unassigned file from workspace');
+
+      // Step 5: Test global file unassignment
+      addTestResult('Step 5: Testing global file cleanup...');
+      
+      const globalUnassignResponse = await fetch('/api/workspace/files/file-image-1', {
+        method: 'DELETE'
+      });
+
+      if (!globalUnassignResponse.ok) {
+        throw new Error('Failed to globally unassign file');
+      }
+
+      addTestResult('✅ Successfully unassigned file from all workspaces');
+
+      // Step 6: Load final state
+      await loadWorkspaceState();
+      
+      addTestResult('🎉 Workspace file management test completed successfully!');
+
+    } catch (error: any) {
+      setError(error.message);
+      addTestResult(`❌ Workspace test failed: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const loadWorkspaceState = async () => {
+    try {
+      setIsLoading(true);
+      addTestResult('Loading workspace state from SQLite...');
+
+      const response = await fetch('/api/workspace');
+      if (!response.ok) {
+        throw new Error('Failed to load workspace state');
+      }
+
+      const result = await response.json();
+      setWorkspaceState(result.data);
+      
+      const workspaceCount = Object.keys(result.data.liveFilesByWorkspace || {}).length;
+      const totalFiles = Object.values(result.data.liveFilesByWorkspace || {})
+        .flat().length;
+      
+      addTestResult(`✅ Loaded ${workspaceCount} workspaces with ${totalFiles} total file assignments`);
+
+    } catch (error: any) {
+      setError(error.message);
+      addTestResult(`❌ Failed to load workspace state: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const clearWorkspaceData = async () => {
+    try {
+      setIsLoading(true);
+      addTestResult('Clearing all workspace data...');
+
+      const response = await fetch('/api/workspace', {
+        method: 'DELETE'
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to clear workspace data');
+      }
+
+      setWorkspaceState(null);
+      addTestResult('✅ All workspace data cleared successfully');
+
+    } catch (error: any) {
+      setError(error.message);
+      addTestResult(`❌ Failed to clear workspace data: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
   // Simulate device store updates
   const updateDeviceId = () => {
     const newId = `device-${Date.now()}`;
     setDeviceState({ localDeviceId: newId });
     addTestResult(`Updated device ID to: ${newId}`);
+  };
+
+  // Personas test functions
+  const loadPersonasData = async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      const response = await fetch('/api/personas');
+      if (!response.ok) {
+        throw new Error('Failed to fetch personas data');
+      }
+
+      const data = await response.json();
+      setPersonasData(data);
+      addTestResult(`✅ Loaded personas data: ${data.hiddenPersonas.length} hidden, ${data.customPersonas.length} custom personas`);
+
+    } catch (error: any) {
+      setError(error.message);
+      addTestResult(`❌ Failed to load personas data: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const testPersonasOperations = async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // Test 1: Toggle hidden persona
+      addTestResult('Testing hidden persona toggle...');
+      const toggleResponse = await fetch('/api/personas/hidden/toggle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ personaId: 'Developer' }),
+      });
+      
+      if (!toggleResponse.ok) {
+        throw new Error('Failed to toggle hidden persona');
+      }
+      addTestResult('✅ Toggled Developer persona visibility');
+
+      // Test 2: Create custom persona
+      addTestResult('Creating custom persona...');
+      const customPersona = {
+        id: `persona-simple-${Date.now()}`,
+        systemPrompt: 'You are a helpful test assistant created for SQLite migration testing.',
+        creationDate: new Date().toISOString(),
+        name: 'Test Persona',
+        inputText: 'This is a test persona created from the SQLite test panel.',
+        inputProvenance: { type: 'text' } as const,
+        llmLabel: 'Test LLM',
+      };
+
+      const createResponse = await fetch('/api/personas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(customPersona),
+      });
+
+      if (!createResponse.ok) {
+        throw new Error('Failed to create custom persona');
+      }
+      addTestResult(`✅ Created custom persona: ${customPersona.name}`);
+
+      // Test 3: Set conversation custom prompt
+      addTestResult('Setting conversation custom prompt...');
+      const testConversationId = 'test-conversation-123';
+      const customPromptResponse = await fetch(`/api/personas/conversation/${testConversationId}`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ 
+          systemPrompt: 'This is a custom prompt for testing conversation-specific personas.' 
+        }),
+      });
+
+      if (!customPromptResponse.ok) {
+        throw new Error('Failed to set conversation custom prompt');
+      }
+      addTestResult(`✅ Set custom prompt for conversation: ${testConversationId}`);
+
+      // Test 4: Retrieve the custom prompt
+      const getPromptResponse = await fetch(`/api/personas/conversation/${testConversationId}`);
+      if (!getPromptResponse.ok) {
+        throw new Error('Failed to get conversation custom prompt');
+      }
+      
+      const promptData = await getPromptResponse.json();
+      addTestResult(`✅ Retrieved custom prompt: &quot;${promptData.systemPrompt?.substring(0, 50)}...&quot;`);
+
+      // Reload personas data to see changes
+      await loadPersonasData();
+
+    } catch (error: any) {
+      setError(error.message);
+      addTestResult(`❌ Failed during personas operations: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
+  };
+
+  const clearPersonasData = async () => {
+    setIsLoading(true);
+    setError(null);
+
+    try {
+      // Clear all hidden personas
+      const response = await fetch('/api/personas/hidden', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ personaIds: [] }),
+      });
+
+      if (!response.ok) {
+        throw new Error('Failed to clear hidden personas');
+      }
+
+      setPersonasData({ ...personasData, hiddenPersonas: [] });
+      addTestResult('✅ Cleared all hidden personas');
+
+    } catch (error: any) {
+      setError(error.message);
+      addTestResult(`❌ Failed to clear personas data: ${error.message}`);
+    } finally {
+      setIsLoading(false);
+    }
   };
 
   // Initialize and load stores on component mount
@@ -1448,7 +1736,7 @@ export function SqliteTestPanel() {
 
         {!metricsData && (
           <Typography level="body-sm" sx={{ color: 'text.secondary' }}>
-            No metrics data loaded. Click "Refresh Metrics Data" to load.
+            No metrics data loaded. Click &quot;Refresh Metrics Data&quot; to load.
           </Typography>
         )}
       </Card>
@@ -1485,6 +1773,127 @@ export function SqliteTestPanel() {
             </Typography>
           )}
         </Box>
+      </Card>
+
+      {/* Personas Store Operations Section */}
+      <Card variant="outlined" sx={{ mb: 3 }}>
+        <Typography level="h4" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+          🎭 Personas Store Operations
+        </Typography>
+        
+        {/* Personas test controls */}
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2 }}>
+          <Button 
+            size="sm" 
+            variant="solid" 
+            onClick={testPersonasOperations}
+            disabled={isLoading}
+          >
+            Test Personas Operations
+          </Button>
+          
+          <Button 
+            size="sm" 
+            variant="outlined" 
+            onClick={loadPersonasData}
+            disabled={isLoading}
+          >
+            Load Personas Data
+          </Button>
+          
+          <Button 
+            size="sm" 
+            variant="outlined" 
+            onClick={clearPersonasData}
+            disabled={isLoading}
+          >
+            Clear Hidden Personas
+          </Button>
+        </Box>
+
+        {/* Personas data display */}
+        {personasData && (
+          <Box sx={{ mb: 2, p: 2, bgcolor: 'background.level1', borderRadius: 'sm' }}>
+            <Typography level="title-sm" sx={{ mb: 1 }}>Current Personas Data:</Typography>
+            <Box sx={{ fontFamily: 'monospace', fontSize: 'xs' }}>
+              <Typography level="body-xs" sx={{ mb: 1 }}>
+                Hidden Personas ({personasData.hiddenPersonas.length}): {personasData.hiddenPersonas.join(', ') || 'None'}
+              </Typography>
+              <Typography level="body-xs" sx={{ mb: 1 }}>
+                Custom Personas ({personasData.customPersonas.length}):
+              </Typography>
+              {personasData.customPersonas.slice(0, 5).map((persona: any) => (
+                <Box key={persona.id} sx={{ ml: 2, mb: 0.5 }}>
+                  <Typography level="body-xs">
+                    • {persona.name || 'Unnamed'} - Created: {new Date(persona.creationDate).toLocaleDateString()}
+                  </Typography>
+                  <Typography level="body-xs" sx={{ ml: 2, color: 'text.secondary', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '600px' }}>
+                    &quot;{persona.systemPrompt}&quot;
+                  </Typography>
+                </Box>
+              ))}
+              {personasData.customPersonas.length > 5 && (
+                <Typography level="body-xs" sx={{ ml: 2, color: 'text.secondary' }}>
+                  ... and {personasData.customPersonas.length - 5} more
+                </Typography>
+              )}
+            </Box>
+          </Box>
+        )}
+      </Card>
+
+      {/* Workspace Store Operations Section */}
+      <Card variant="outlined" sx={{ mb: 3 }}>
+        <Typography level="h4" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+          📁 Workspace Store Operations (File Management)
+        </Typography>
+        
+        {/* Workspace test controls */}
+        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', mb: 2 }}>
+          <Button 
+            size="sm" 
+            variant="solid" 
+            onClick={testWorkspaceOperations}
+            disabled={isLoading}
+          >
+            Test Workspace File Management
+          </Button>
+          
+          <Button 
+            size="sm" 
+            variant="outlined" 
+            onClick={loadWorkspaceState}
+            disabled={isLoading}
+          >
+            Load Workspace State
+          </Button>
+          
+          <Button 
+            size="sm" 
+            variant="outlined" 
+            onClick={clearWorkspaceData}
+            disabled={isLoading}
+          >
+            Clear Workspace Data
+          </Button>
+        </Box>
+
+        {/* Workspace state display */}
+        {workspaceState && (
+          <Box sx={{ mb: 2, p: 2, bgcolor: 'background.level1', borderRadius: 'sm' }}>
+            <Typography level="title-sm" sx={{ mb: 1 }}>Current Workspace State:</Typography>
+            <Box sx={{ fontFamily: 'monospace', fontSize: 'xs' }}>
+              <Typography level="body-xs">
+                Total Workspaces: {Object.keys(workspaceState.liveFilesByWorkspace || {}).length}
+              </Typography>
+              {Object.entries(workspaceState.liveFilesByWorkspace || {}).map(([workspaceId, files]) => (
+                <Typography key={workspaceId} level="body-xs" sx={{ ml: 2 }}>
+                  {workspaceId}: {(files as string[]).length} files
+                </Typography>
+              ))}
+            </Box>
+          </Box>
+        )}
       </Card>
 
       <Divider sx={{ my: 3 }} />

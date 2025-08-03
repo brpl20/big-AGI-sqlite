@@ -1,6 +1,6 @@
 import * as React from 'react';
 import { useState, useEffect, useRef } from 'react';
-import { Box, Button, Card, Typography, Input, Alert, Divider, IconButton, CircularProgress, Menu, MenuItem, Dropdown, MenuButton, Modal, ModalDialog, ModalClose, Stack } from '@mui/joy';
+import { Box, Button, Card, Typography, Textarea, Alert, Divider, IconButton, CircularProgress, Menu, MenuItem, Dropdown, MenuButton, Modal, ModalDialog, ModalClose, Stack, Chip, List, ListItem, ListItemButton, ListItemContent, ListItemDecorator, Input } from '@mui/joy';
 import SendIcon from '@mui/icons-material/Send';
 import ClearIcon from '@mui/icons-material/Clear';
 import SmartToyIcon from '@mui/icons-material/SmartToy';
@@ -14,6 +14,14 @@ import DeleteIcon from '@mui/icons-material/Delete';
 import CheckIcon from '@mui/icons-material/Check';
 import CloseIcon from '@mui/icons-material/Close';
 import MoreVertIcon from '@mui/icons-material/MoreVert';
+import AttachFileIcon from '@mui/icons-material/AttachFile';
+import DescriptionIcon from '@mui/icons-material/Description';
+import ImageIcon from '@mui/icons-material/Image';
+import PictureAsPdfIcon from '@mui/icons-material/PictureAsPdf';
+import InsertDriveFileIcon from '@mui/icons-material/InsertDriveFile';
+import DragIndicatorIcon from '@mui/icons-material/DragIndicator';
+import { SystemPurposes } from '../src/data';
+import KeyboardIcon from '@mui/icons-material/Keyboard';
 
 import { withNextJSPerPageLayout } from '~/common/layout/withLayout';
 import { agiId } from '~/common/util/idUtils';
@@ -38,6 +46,15 @@ const StreamingCursor = () => (
   />
 );
 
+interface DocumentAttachment {
+  id: string;
+  name: string;
+  type: string;
+  size: number;
+  content: string;
+  lastModified: number;
+}
+
 interface ChatMessage {
   id: string;
   role: 'user' | 'assistant' | 'system';
@@ -47,6 +64,7 @@ interface ChatMessage {
   isStreaming?: boolean;
   cost?: number;
   model?: string;
+  attachments?: DocumentAttachment[];
 }
 
 interface ChatSession {
@@ -57,6 +75,7 @@ interface ChatSession {
   updated: number;
   totalCost?: number;
   totalTokens?: number;
+  systemPurposeId?: string;
 }
 
 interface MetricsData {
@@ -98,7 +117,24 @@ export default withNextJSPerPageLayout({ type: 'noop' }, () => {
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState<string>('');
   const [showDeleteConfirmation, setShowDeleteConfirmation] = useState<string | null>(null);
+  const [personasData, setPersonasData] = useState<any>(null);
+  const [selectedPersona, setSelectedPersona] = useState<string>('Generic');
+
+  // Update current session's systemPurposeId when persona changes
+  const handlePersonaChange = (newPersona: string) => {
+    setSelectedPersona(newPersona);
+    if (currentSession) {
+      setCurrentSession({
+        ...currentSession,
+        systemPurposeId: newPersona
+      });
+    }
+  };
   const [showExportModal, setShowExportModal] = useState<string | null>(null);
+  const [attachments, setAttachments] = useState<DocumentAttachment[]>([]);
+  const [isDragActive, setIsDragActive] = useState(false);
+  const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const streamingMessageRef = useRef<string>('');
 
@@ -130,6 +166,7 @@ export default withNextJSPerPageLayout({ type: 'noop' }, () => {
       loadChatSessions();
       loadMetricsData();
       loadAvailableModels();
+      loadPersonasData();
     };
 
     initializeStores();
@@ -219,6 +256,19 @@ export default withNextJSPerPageLayout({ type: 'noop' }, () => {
     }
   };
 
+  const loadPersonasData = async () => {
+    try {
+      const response = await fetch('/api/personas');
+      if (response.ok) {
+        const data = await response.json();
+        setPersonasData(data);
+        console.log('[Chat Test] Personas data loaded:', data);
+      }
+    } catch (err) {
+      console.error('Failed to load personas data:', err);
+    }
+  };
+
   const loadChatSessions = async () => {
     try {
       const response = await fetch('/api/chats');
@@ -254,6 +304,7 @@ export default withNextJSPerPageLayout({ type: 'noop' }, () => {
       messages: [],
       created: Date.now(),
       updated: Date.now(),
+      systemPurposeId: selectedPersona,
     };
     setCurrentSession(newSession);
     setError(null);
@@ -268,7 +319,7 @@ export default withNextJSPerPageLayout({ type: 'noop' }, () => {
         isArchived: false,
         _isIncognito: false,
         userSymbol: undefined,
-        systemPurposeId: 'Generic',
+        systemPurposeId: selectedPersona,
         messages: session.messages.map((msg) => ({
           id: msg.id,
           role: msg.role,
@@ -324,14 +375,159 @@ export default withNextJSPerPageLayout({ type: 'noop' }, () => {
     }
   };
 
+  // File Handling Functions
+
+  const handleFileSelect = async (files: FileList) => {
+    const newAttachments: DocumentAttachment[] = [];
+    
+    for (let i = 0; i < files.length; i++) {
+      const file = files[i];
+      
+      // Check file size (limit to 10MB)
+      if (file.size > 10 * 1024 * 1024) {
+        setError(`File "${file.name}" is too large. Maximum size is 10MB.`);
+        continue;
+      }
+      
+      // Check file type
+      const allowedTypes = [
+        'text/plain',
+        'text/markdown',
+        'application/pdf',
+        'application/json',
+        'text/csv',
+        'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+        'application/msword',
+        'text/html',
+        'text/xml',
+        'application/xml'
+      ];
+      
+      if (!allowedTypes.includes(file.type) && !file.name.match(/\.(txt|md|json|csv|html|xml|js|ts|py|java|cpp|c|h|css|jsx|tsx)$/i)) {
+        setError(`File type "${file.type}" is not supported.`);
+        continue;
+      }
+      
+      try {
+        const content = await readFileContent(file);
+        const attachment: DocumentAttachment = {
+          id: `att-${Date.now()}-${i}`,
+          name: file.name,
+          type: file.type || 'text/plain',
+          size: file.size,
+          content: content,
+          lastModified: file.lastModified,
+        };
+        
+        newAttachments.push(attachment);
+      } catch (error) {
+        console.error('Error reading file:', error);
+        setError(`Failed to read file "${file.name}"`);
+      }
+    }
+    
+    if (newAttachments.length > 0) {
+      setAttachments(prev => [...prev, ...newAttachments]);
+      setError(null);
+    }
+  };
+
+  const readFileContent = (file: File): Promise<string> => {
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = (e) => resolve(e.target?.result as string || '');
+      reader.onerror = (e) => reject(e);
+      reader.readAsText(file);
+    });
+  };
+
+  const removeAttachment = (attachmentId: string) => {
+    setAttachments(prev => prev.filter(att => att.id !== attachmentId));
+  };
+
+  const handleDragOver = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragActive(true);
+  };
+
+  const handleDragLeave = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragActive(false);
+  };
+
+  const handleDrop = async (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDragActive(false);
+    
+    if (e.dataTransfer.files) {
+      await handleFileSelect(e.dataTransfer.files);
+    }
+  };
+
+  const getFileIcon = (fileType: string, fileName: string) => {
+    if (fileType.startsWith('image/')) return <ImageIcon />;
+    if (fileType === 'application/pdf') return <PictureAsPdfIcon />;
+    if (fileName.match(/\.(md|txt)$/i)) return <DescriptionIcon />;
+    return <InsertDriveFileIcon />;
+  };
+
+  const formatFileSize = (bytes: number) => {
+    if (bytes === 0) return '0 Bytes';
+    const k = 1024;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return parseFloat((bytes / Math.pow(k, i)).toFixed(2)) + ' ' + sizes[i];
+  };
+
+  // Enhanced keyboard handling
+  const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
+    // Ctrl/Cmd + Enter to send
+    if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
+      e.preventDefault();
+      sendMessage();
+      return;
+    }
+    
+    // Ctrl/Cmd + K for keyboard shortcuts help
+    if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+      e.preventDefault();
+      setShowKeyboardShortcuts(true);
+      return;
+    }
+    
+    // Ctrl/Cmd + / for help
+    if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+      e.preventDefault();
+      setShowKeyboardShortcuts(true);
+      return;
+    }
+    
+    // Allow normal Enter for new lines
+    // Shift+Enter already handled by default textarea behavior
+  };
+
   const sendMessage = async () => {
-    if (!inputMessage.trim() || !currentSession || isLoading) return;
+    if ((!inputMessage.trim() && attachments.length === 0) || !currentSession || isLoading) return;
+
+    // Build message content including attachments
+    let messageContent = inputMessage.trim();
+    
+    if (attachments.length > 0) {
+      const attachmentContext = attachments.map(att => 
+        `\n\n--- File: ${att.name} (${formatFileSize(att.size)}) ---\n${att.content}\n--- End of ${att.name} ---`
+      ).join('');
+      
+      messageContent = messageContent 
+        ? `${messageContent}${attachmentContext}`
+        : `[Attached ${attachments.length} file(s)]${attachmentContext}`;
+    }
 
     const userMessage: ChatMessage = {
       id: `msg-${Date.now()}`,
       role: 'user',
-      content: inputMessage.trim(),
+      content: messageContent,
       timestamp: Date.now(),
+      attachments: attachments.length > 0 ? [...attachments] : undefined,
     };
 
     // Create placeholder assistant message for streaming
@@ -351,6 +547,7 @@ export default withNextJSPerPageLayout({ type: 'noop' }, () => {
 
     setCurrentSession(updatedSession);
     setInputMessage('');
+    setAttachments([]); // Clear attachments after sending
     setIsLoading(true);
     setIsStreaming(true);
     setStreamingCharCount(0);
@@ -367,7 +564,36 @@ export default withNextJSPerPageLayout({ type: 'noop' }, () => {
 
     try {
       // Build system message with SQLite context
-      const systemMessage = `You are an AI assistant integrated with SQLite-backed big-AGI.
+      // Get the selected persona's system prompt
+      let personaSystemPrompt = SystemPurposes.Generic.systemMessage;
+      
+      if (selectedPersona === 'Custom') {
+        // For custom persona in a conversation, fetch from the API
+        try {
+          const customPromptResponse = await fetch(`/api/personas/conversation/${currentSession.id}`);
+          if (customPromptResponse.ok) {
+            const data = await customPromptResponse.json();
+            if (data.systemPrompt) {
+              personaSystemPrompt = data.systemPrompt;
+            }
+          }
+        } catch (err) {
+          console.log('No custom prompt for this conversation, using default');
+        }
+      } else if (selectedPersona && SystemPurposes[selectedPersona as keyof typeof SystemPurposes]) {
+        // Predefined persona
+        personaSystemPrompt = SystemPurposes[selectedPersona as keyof typeof SystemPurposes].systemMessage;
+      } else if (selectedPersona && personasData?.customPersonas) {
+        // Custom persona from the list
+        const customPersona = personasData.customPersonas.find((p: any) => p.id === selectedPersona);
+        if (customPersona) {
+          personaSystemPrompt = customPersona.systemPrompt;
+        }
+      }
+
+      const systemMessage = `${personaSystemPrompt}
+
+Additional Context - SQLite-backed big-AGI:
 Current session: ${updatedSession.id}
 UI Preferences: ${
         uiPreferences
@@ -404,7 +630,8 @@ Please respond naturally to the user while acknowledging this SQLite integration
           model: selectedModel,
           uiPreferences: uiPreferences,
           uxLabsSettings: uxLabsSettings,
-          systemContext: systemMessage,
+          systemContext: null, // Backend resolves persona via systemPurposeId
+          systemPurposeId: selectedPersona,
         }),
       });
 
@@ -595,6 +822,10 @@ Please respond naturally to the user while acknowledging this SQLite integration
 
   const selectSession = (session: ChatSession) => {
     setCurrentSession(session);
+    // Sync the selected persona with the session's systemPurposeId
+    if (session.systemPurposeId) {
+      setSelectedPersona(session.systemPurposeId);
+    }
     setError(null);
   };
 
@@ -729,6 +960,7 @@ Please respond naturally to the user while acknowledging this SQLite integration
       updated: Date.now(),
       totalCost: session.totalCost,
       totalTokens: session.totalTokens,
+      systemPurposeId: session.systemPurposeId,
     };
 
     try {
@@ -813,12 +1045,7 @@ Please respond naturally to the user while acknowledging this SQLite integration
     }
   };
 
-  const handleKeyPress = (e: React.KeyboardEvent) => {
-    if (e.key === 'Enter' && !e.shiftKey && !isStreaming) {
-      e.preventDefault();
-      sendMessage();
-    }
-  };
+  // Removed old handleKeyPress - now using handleKeyDown with enhanced keyboard shortcuts
 
   return (
     <Box
@@ -898,10 +1125,10 @@ Please respond naturally to the user while acknowledging this SQLite integration
           </Box>
         </Card>
 
-        {/* Model Selection */}
+        {/* Model & Persona Selection */}
         <Card sx={{ mb: 3, p: 2 }}>
           <Typography level="h4" sx={{ mb: 2 }}>
-            🤖 Model Selection & Pricing
+            🤖 Model & Persona Selection
           </Typography>
           
           <Box sx={{ display: 'flex', gap: 2, alignItems: 'center', flexWrap: 'wrap', mb: 2 }}>
@@ -925,6 +1152,43 @@ Please respond naturally to the user while acknowledging this SQLite integration
                     {model.pricing?.description || model.name}
                   </option>
                 ))}
+              </select>
+            </Box>
+
+            {/* Persona Selector */}
+            <Box sx={{ minWidth: '200px' }}>
+              <Typography level="body-sm" sx={{ mb: 1, fontWeight: 'bold' }}>
+                AI Persona:
+              </Typography>
+              <select 
+                value={selectedPersona} 
+                onChange={(e) => handlePersonaChange(e.target.value)}
+                style={{
+                  padding: '8px 12px',
+                  borderRadius: '6px',
+                  border: '1px solid #ccc',
+                  fontSize: '14px',
+                  minWidth: '200px'
+                }}
+              >
+                <optgroup label="Predefined Personas">
+                  <option value="Generic">🧠 Default</option>
+                  <option value="Developer">👨‍💻 Developer</option>
+                  <option value="Scientist">🔬 Scientist</option>
+                  <option value="Catalyst">🚀 Catalyst</option>
+                  <option value="Executive">👔 Executive</option>
+                  <option value="Designer">🖌️ Designer</option>
+                  <option value="Custom">⚡ Custom</option>
+                </optgroup>
+                {personasData?.customPersonas && personasData.customPersonas.length > 0 && (
+                  <optgroup label="Custom Personas">
+                    {personasData.customPersonas.map((persona: any) => (
+                      <option key={persona.id} value={persona.id}>
+                        🎭 {persona.name || 'Unnamed Persona'}
+                      </option>
+                    ))}
+                  </optgroup>
+                )}
               </select>
             </Box>
 
@@ -952,6 +1216,41 @@ Please respond naturally to the user while acknowledging this SQLite integration
             Available Models: {availableModels.length} • Current: {selectedModel}
             {modelPricing && ` • Est. cost per 1K tokens: $${((modelPricing.input + modelPricing.output) / 1000).toFixed(6)}`}
           </Typography>
+          
+          {/* Custom Persona Editor */}
+          {selectedPersona === 'Custom' && (
+            <Box sx={{ mt: 2 }}>
+              <Typography level="body-sm" sx={{ mb: 1, fontWeight: 'bold' }}>
+                Custom System Prompt:
+              </Typography>
+              <Textarea
+                placeholder="Enter your custom system prompt here..."
+                minRows={3}
+                defaultValue={SystemPurposes.Custom.systemMessage}
+                onChange={async (e) => {
+                  if (currentSession) {
+                    // Save the custom prompt for this conversation
+                    try {
+                      await fetch(`/api/personas/conversation/${currentSession.id}`, {
+                        method: 'PUT',
+                        headers: { 'Content-Type': 'application/json' },
+                        body: JSON.stringify({ systemPrompt: e.target.value }),
+                      });
+                    } catch (err) {
+                      console.error('Failed to save custom prompt:', err);
+                    }
+                  }
+                }}
+                sx={{
+                  fontFamily: 'monospace',
+                  fontSize: 'sm',
+                }}
+              />
+              <Typography level="body-xs" sx={{ mt: 1, color: 'text.secondary' }}>
+                This custom prompt will be used for all messages in this conversation.
+              </Typography>
+            </Box>
+          )}
         </Card>
 
         {/* Comprehensive Metrics Dashboard */}
@@ -1405,6 +1704,31 @@ Please respond naturally to the user while acknowledging this SQLite integration
                           <span>{message.content}</span>
                           {message.isStreaming && <StreamingCursor />}
                         </Typography>
+                        
+                        {/* Display attachments for user messages */}
+                        {message.role === 'user' && message.attachments && message.attachments.length > 0 && (
+                          <Box sx={{ mt: 1, display: 'flex', flexWrap: 'wrap', gap: 0.5 }}>
+                            {message.attachments.map((attachment) => (
+                              <Chip
+                                key={attachment.id}
+                                variant="soft"
+                                color="neutral"
+                                size="sm"
+                                startDecorator={getFileIcon(attachment.type, attachment.name)}
+                                sx={{ fontSize: '0.75rem' }}
+                              >
+                                <Box>
+                                  <Typography level="body-xs" noWrap sx={{ maxWidth: '150px' }}>
+                                    {attachment.name}
+                                  </Typography>
+                                  <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                                    {formatFileSize(attachment.size)}
+                                  </Typography>
+                                </Box>
+                              </Chip>
+                            ))}
+                          </Box>
+                        )}
                       </Box>
                     </Box>
                   ))}
@@ -1428,21 +1752,148 @@ Please respond naturally to the user while acknowledging this SQLite integration
                   </Alert>
                 )}
 
-                {/* Input */}
-                <Box sx={{ display: 'flex', gap: 1 }}>
-                  <Input
-                    value={inputMessage}
-                    onChange={(e) => setInputMessage(e.target.value)}
-                    onKeyPress={handleKeyPress}
-                    disabled={isLoading || isStreaming}
-                    placeholder={isStreaming ? `Aguarde... (${streamingWordCount} palavras recebidas)` : 'Digite sua mensagem...'}
-                    sx={{ flex: 1 }}
-                    endDecorator={
-                      <IconButton onClick={sendMessage} disabled={!inputMessage.trim() || isLoading || isStreaming} size="sm">
-                        <SendIcon />
-                      </IconButton>
-                    }
-                  />
+                {/* File Attachments Display */}
+                {attachments.length > 0 && (
+                  <Card variant="soft" sx={{ mb: 2, p: 2 }}>
+                    <Typography level="body-sm" sx={{ mb: 1, fontWeight: 'bold' }}>
+                      Attached Files ({attachments.length}):
+                    </Typography>
+                    <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1 }}>
+                      {attachments.map((attachment) => (
+                        <Chip
+                          key={attachment.id}
+                          variant="soft"
+                          color="primary"
+                          startDecorator={getFileIcon(attachment.type, attachment.name)}
+                          endDecorator={
+                            <IconButton
+                              size="sm"
+                              onClick={() => removeAttachment(attachment.id)}
+                              sx={{ '--IconButton-size': '16px', ml: 0.5 }}
+                            >
+                              <CloseIcon sx={{ fontSize: 12 }} />
+                            </IconButton>
+                          }
+                          sx={{ maxWidth: '200px' }}
+                        >
+                          <Box sx={{ overflow: 'hidden', textOverflow: 'ellipsis' }}>
+                            <Typography level="body-xs" noWrap>
+                              {attachment.name}
+                            </Typography>
+                            <Typography level="body-xs" sx={{ color: 'text.secondary' }}>
+                              {formatFileSize(attachment.size)}
+                            </Typography>
+                          </Box>
+                        </Chip>
+                      ))}
+                    </Box>
+                  </Card>
+                )}
+
+                {/* Enhanced Input with Drag & Drop */}
+                <Box 
+                  sx={{ 
+                    position: 'relative',
+                    border: isDragActive ? '2px dashed' : '1px solid transparent',
+                    borderColor: isDragActive ? 'primary.main' : 'transparent',
+                    borderRadius: 'sm',
+                    transition: 'all 0.2s ease',
+                    backgroundColor: isDragActive ? 'primary.softBg' : 'transparent',
+                  }}
+                  onDragOver={handleDragOver}
+                  onDragLeave={handleDragLeave}
+                  onDrop={handleDrop}
+                >
+                  {isDragActive && (
+                    <Box
+                      sx={{
+                        position: 'absolute',
+                        top: 0,
+                        left: 0,
+                        right: 0,
+                        bottom: 0,
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'center',
+                        backgroundColor: 'primary.softBg',
+                        borderRadius: 'sm',
+                        zIndex: 10,
+                        pointerEvents: 'none',
+                      }}
+                    >
+                      <Box sx={{ textAlign: 'center' }}>
+                        <DragIndicatorIcon sx={{ fontSize: '2rem', color: 'primary.main', mb: 1 }} />
+                        <Typography level="body-sm" sx={{ color: 'primary.main', fontWeight: 'bold' }}>
+                          Drop files to attach
+                        </Typography>
+                      </Box>
+                    </Box>
+                  )}
+                  
+                  <Box sx={{ display: 'flex', gap: 1, alignItems: 'flex-end' }}>
+                    {/* File attachment button */}
+                    <IconButton
+                      size="sm"
+                      variant="soft"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={isLoading || isStreaming}
+                      title="Attach files (or drag & drop)"
+                    >
+                      <AttachFileIcon />
+                    </IconButton>
+                    
+                    {/* Hidden file input */}
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      multiple
+                      accept=".txt,.md,.json,.csv,.html,.xml,.js,.ts,.py,.java,.cpp,.c,.h,.css,.jsx,.tsx,.pdf,.doc,.docx"
+                      onChange={(e) => e.target.files && handleFileSelect(e.target.files)}
+                      style={{ display: 'none' }}
+                    />
+                    
+                    {/* Textarea for message input */}
+                    <Textarea
+                      value={inputMessage}
+                      onChange={(e) => setInputMessage(e.target.value)}
+                      onKeyDown={handleKeyDown}
+                      disabled={isLoading || isStreaming}
+                      placeholder={
+                        isStreaming 
+                          ? `Aguarde... (${streamingWordCount} palavras recebidas)`
+                          : 'Digite sua mensagem... (Ctrl+Enter to send, Enter for new line)'
+                      }
+                      minRows={1}
+                      maxRows={8}
+                      sx={{ 
+                        flex: 1,
+                        '& textarea': {
+                          resize: 'none',
+                        },
+                      }}
+                    />
+                    
+                    {/* Send button */}
+                    <IconButton 
+                      onClick={sendMessage} 
+                      disabled={(!inputMessage.trim() && attachments.length === 0) || isLoading || isStreaming} 
+                      size="sm"
+                      variant="solid"
+                      color="primary"
+                    >
+                      <SendIcon />
+                    </IconButton>
+                    
+                    {/* Keyboard shortcuts button */}
+                    <IconButton
+                      size="sm"
+                      variant="plain"
+                      onClick={() => setShowKeyboardShortcuts(true)}
+                      title="Keyboard shortcuts (Ctrl+K)"
+                    >
+                      <KeyboardIcon />
+                    </IconButton>
+                  </Box>
                 </Box>
 
                 {/* Session Info */}
@@ -1519,6 +1970,81 @@ Please respond naturally to the user while acknowledging this SQLite integration
                 Markdown
               </Button>
             </Stack>
+          </ModalDialog>
+        </Modal>
+
+        {/* Keyboard Shortcuts Modal */}
+        <Modal open={showKeyboardShortcuts} onClose={() => setShowKeyboardShortcuts(false)}>
+          <ModalDialog sx={{ maxWidth: '500px' }}>
+            <ModalClose />
+            <Typography level="h4" sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+              <KeyboardIcon />
+              Keyboard Shortcuts
+            </Typography>
+            
+            <List>
+              <ListItem>
+                <ListItemDecorator>
+                  <Typography level="body-sm" sx={{ fontFamily: 'monospace', bgcolor: 'background.level2', px: 1, py: 0.5, borderRadius: 'xs' }}>
+                    Ctrl+Enter
+                  </Typography>
+                </ListItemDecorator>
+                <ListItemContent>Send message</ListItemContent>
+              </ListItem>
+              
+              <ListItem>
+                <ListItemDecorator>
+                  <Typography level="body-sm" sx={{ fontFamily: 'monospace', bgcolor: 'background.level2', px: 1, py: 0.5, borderRadius: 'xs' }}>
+                    Enter
+                  </Typography>
+                </ListItemDecorator>
+                <ListItemContent>New line in message</ListItemContent>
+              </ListItem>
+              
+              <ListItem>
+                <ListItemDecorator>
+                  <Typography level="body-sm" sx={{ fontFamily: 'monospace', bgcolor: 'background.level2', px: 1, py: 0.5, borderRadius: 'xs' }}>
+                    Ctrl+K
+                  </Typography>
+                </ListItemDecorator>
+                <ListItemContent>Show keyboard shortcuts</ListItemContent>
+              </ListItem>
+              
+              <ListItem>
+                <ListItemDecorator>
+                  <Typography level="body-sm" sx={{ fontFamily: 'monospace', bgcolor: 'background.level2', px: 1, py: 0.5, borderRadius: 'xs' }}>
+                    Ctrl+/
+                  </Typography>
+                </ListItemDecorator>
+                <ListItemContent>Show help</ListItemContent>
+              </ListItem>
+              
+              <Divider sx={{ my: 2 }} />
+              
+              <ListItem>
+                <ListItemContent>
+                  <Typography level="body-sm" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>
+                    • Drag & drop files anywhere in the chat to attach them
+                  </Typography>
+                </ListItemContent>
+              </ListItem>
+              
+              <ListItem>
+                <ListItemContent>
+                  <Typography level="body-sm" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>
+                    • Supported file types: .txt, .md, .json, .csv, .html, .xml, .js, .ts, .py, .java, .cpp, .c, .h, .css, .jsx, .tsx, .pdf, .doc, .docx
+                  </Typography>
+                </ListItemContent>
+              </ListItem>
+              
+              <ListItem>
+                <ListItemContent>
+                  <Typography level="body-sm" sx={{ fontStyle: 'italic', color: 'text.secondary' }}>
+                    • Maximum file size: 10MB per file
+                  </Typography>
+                </ListItemContent>
+              </ListItem>
+            </List>
           </ModalDialog>
         </Modal>
       </Box>

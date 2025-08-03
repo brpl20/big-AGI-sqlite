@@ -1,10 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { SystemPurposes, SystemPurposeId } from '../../../src/data';
 
-// Simple API endpoint to test OpenAI integration with SQLite data
+// Simple API endpoint to test OpenAI integration with SQLite data (fixed imports)
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
-    const { prompt, model = 'gpt-3.5-turbo', uiPreferences = {}, systemContext } = body;
+    const { prompt, model = 'gpt-3.5-turbo', uiPreferences = {}, systemContext, systemPurposeId } = body;
 
     if (!prompt) {
       return NextResponse.json({ success: false, error: 'Prompt is required' }, { status: 400 });
@@ -23,18 +24,35 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Prepare system message with UI preferences context
-    const defaultSystemMessage = `You are an AI assistant integrated with a SQLite-backed system.
-Current user preferences from SQLite:
-- Language: ${uiPreferences.preferredLanguage || 'en-US'}
-- UI Complexity: ${uiPreferences.complexityMode || 'pro'}
-- Content Scaling: ${uiPreferences.contentScaling || 'sm'}
-- Center Mode: ${uiPreferences.centerMode || 'full'}
+    // Use BigAGI's proper persona resolution system
+    let systemMessage = 'You are an AI assistant.';
+    
+    if (systemPurposeId && SystemPurposes[systemPurposeId as SystemPurposeId]) {
+      const persona = SystemPurposes[systemPurposeId as SystemPurposeId];
+      
+      // Apply BigAGI's bareBonesPromptMixer logic (simplified version)
+      systemMessage = persona.systemMessage
+        .replace(/\{\{LLM\.Cutoff\}\}/g, 'January 2024')
+        .replace(/\{\{LocaleNow\}\}/g, new Date().toLocaleDateString())
+        .replace(/\{\{Today\}\}/g, new Date().toLocaleDateString())
+        .replace(/\{\{RenderMermaid\}\}/g, 'You can create Mermaid diagrams using ```mermaid code blocks.')
+        .replace(/\{\{RenderPlantUML\}\}/g, 'You can create PlantUML diagrams using ```plantuml code blocks.')
+        .replace(/\{\{RenderSVG\}\}/g, 'You can create SVG graphics using ```svg code blocks.')
+        .replace(/\{\{PreferTables\}\}/g, 'When presenting data, prefer markdown tables when appropriate.');
+      
+      console.log(`[AI API] Using persona: ${systemPurposeId}`);
+      console.log(`[AI API] Processed system message: ${systemMessage.substring(0, 100)}...`);
+    } else {
+      console.log(`[AI API] No valid persona found for: ${systemPurposeId}, using default`);
+    }
 
-This is a test to verify that data flows correctly from SQLite storage through to the AI API.
-Please acknowledge that you received this context information and respond to the user's message.`;
-
-    const systemMessage = systemContext || defaultSystemMessage;
+    // Add context if provided, otherwise use the persona system message directly
+    if (systemContext) {
+      systemMessage = systemContext;
+    } else if (systemPurposeId) {
+      // Add minimal context for testing
+      systemMessage += `\n\nAdditional Context: You are being tested in a SQLite-backed system. Respond naturally with your persona characteristics.`;
+    }
 
     // Make request to OpenAI API with streaming
     const openaiResponse = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -104,7 +122,15 @@ Please acknowledge that you received this context information and respond to the
                 if (!line.startsWith('data: ')) continue;
 
                 try {
-                  const data = JSON.parse(line.slice(6));
+                  const jsonStr = line.slice(6).trim();
+                  if (!jsonStr) continue;
+                  
+                  // Additional validation: check if JSON string looks complete
+                  if (!jsonStr.startsWith('{') || !jsonStr.endsWith('}')) {
+                    continue;
+                  }
+                  
+                  const data = JSON.parse(jsonStr);
                   const content = data.choices?.[0]?.delta?.content;
 
                   if (content) {
@@ -120,7 +146,8 @@ Please acknowledge that you received this context information and respond to the
                     );
                   }
                 } catch (e) {
-                  console.error('Error parsing SSE data:', e);
+                  // Silently skip malformed JSON chunks - they're often incomplete fragments
+                  console.warn('Skipped malformed SSE chunk');
                 }
               }
             } catch (e) {

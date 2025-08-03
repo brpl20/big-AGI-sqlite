@@ -1,0 +1,12 @@
+This is a test document for the enhanced chat interface.
+
+It contains multiple lines and demonstrates the file attachment functionality.
+
+Key features being tested:
+- Document insertion capability
+- File drag & drop support  
+- Keyboard shortcuts (Ctrl+Enter, Ctrl+K, etc.)
+- BigAGI-like interface improvements
+- File attachment display and management
+
+This document should be successfully attached to chat messages and included in the AI context.

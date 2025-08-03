@@ -1,6 +1,5 @@
-import * as sqlite3 from 'sqlite3';
-import * as fs from 'fs';
-import * as path from 'path';
+// Workspace-specific SQLite adapter that only runs on server-side
+// Uses dynamic imports to avoid bundling SQLite in client-side code
 
 import type { LiveFileId } from '~/common/livefile/liveFile.types';
 
@@ -41,14 +40,19 @@ export class SQLiteWorkspaceAdapter implements WorkspaceAdapter {
     if (this.initialized || !this.isServer) return;
 
     try {
-      const dbPath = path.join(process.cwd(), 'data', 'workspace.db');
-      const dbDir = path.dirname(dbPath);
-      
-      if (!fs.existsSync(dbDir)) {
-        fs.mkdirSync(dbDir, { recursive: true });
+      // Dynamic import to avoid bundling sqlite3 in client-side code
+      const sqlite3 = await import('sqlite3');
+      const Database = sqlite3.default;
+
+      if (!Database || typeof Database.Database !== 'function') {
+        throw new Error('Failed to load SQLite3 Database constructor');
       }
 
-      this.db = new sqlite3.Database(dbPath);
+      const fs = await import('fs');
+      const path = await import('path');
+
+      const dbPath = path.join(process.cwd(), 'big-agi-workspace.db');
+      this.db = new Database.Database(dbPath);
       
       // Initialize schema
       const schemaPath = path.join(process.cwd(), 'src', 'lib', 'db', 'workspace-schema.sql');
